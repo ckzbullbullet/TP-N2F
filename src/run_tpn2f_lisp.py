@@ -6,10 +6,7 @@ import json
 import logging
 import os
 import random
-import regex as re
-import sys
 import numpy as np
-import operator
 from tqdm import tqdm, trange
 import copy
 
@@ -21,9 +18,8 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from torch.utils.data.distributed import DistributedSampler
 from torch.autograd import Variable
 
-from pytorch_seq2seq.model import TPN2F
-import evaluate_tprdecoder as evaluate
-import solve
+from model import TPN2F
+import evaluate_lisp as evaluate
 
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
@@ -32,328 +28,159 @@ logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(messa
 logger = logging.getLogger(__name__)
 
 
-class MathQAExample(object):
+class LispExample(object):
     """A single training/test example for the SWAG dataset."""
     def __init__(self,
-                 problem,
-                 rationale,
-                 options,
-                 correct,
-                 annotated_formula,
-                 linear_formula,
-                 category):
-        self.problem = problem
-        self.rationale = rationale
-        self.options = self.parse_options(options)
-        self.label = self.encode_correct(correct)
-        self.annotated_formula = self.parse_annotated_formula(annotated_formula)
-        self.linear_formula = self.parse_linear_formula(linear_formula)
-        self.category = category
-
-    def __str__(self):
-        return self.__repr__()
-
-    def encode_correct(self, correct):
-        if correct == 'a':
-            return 0
-        elif correct == 'b':
-            return 1
-        elif correct == 'c':
-            return 2
-        elif correct == 'd':
-            return 3
-        else:
-            return 4
-
-    def parse_options(self, options):
-        result = [
-        o.rstrip(' , ').strip() for o in re.split(r'[a-z] \)\ ', options)[1:] if len(o)!=0
-        ] 
-        return result
-
-    def parse_annotated_formula(self,af):
-        return af.replace('(', ' ').replace(')',' ').replace(',',' ').split()
-
-
-    def parse_linear_formula(self,lf):
-        return lf.replace('(', ' ').replace(')',' ').replace(',',' ').replace('|',' ').split()
+                 text,
+                 code_tree,
+                 code_sequence,
+                 code_commands_pad,
+                 code_commands,
+                 tests,
+                 args):
+        self.text = text
+        self.code_tree = code_tree
+        self.code_sequence = code_sequence
+        self.code_commands_pad = code_commands_pad
+        self.code_commands = code_commands
+        self.tests = tests
+        self.args = args
 
 
 class SourceDict(object):
-    def __init__(self, train_path, test_path, dev_path):
+    def __init__(self, filepath):
         self.vocab = {}
 
-        self.src2index = {
-        '<s>': 0,
-        '<pad>': 1,
-        '</s>': 2,
-        '<unk>': 3,
-        }
+        self.src2index = {}
 
-        self.index2src = {
-        0: '<s>',
-        1: '<pad>',
-        2: '</s>',
-        3: '<unk>',
-        }
+        self.index2src = {}
 
-        lines = self.extract_lines(train_path, test_path, dev_path)
-        self.construct_vocab(lines)
+        self.construct_vocab(filepath)
         self.n_srcs = len(self.src2index)
 
-    def extract_lines(self,train_path, test_path, dev_path):
-        lines = []
-        with open(train_path, 'r', encoding='utf8') as f:
-            for line in f:
-                lines.append(line.strip().split())
-        with open(test_path, 'r', encoding='utf8') as f:
-            for line in f:
-                lines.append(line.strip().split())
-        with open(dev_path, 'r', encoding='utf8') as f:
-            for line in f:
-                lines.append(line.strip().split())
-        return lines
-
-    def construct_vocab(self, lines):
-        self.vocab = {}
-        for line in lines:
-            for word in line:
-                if word not in self.vocab:
-                    self.vocab[word] = 1
-                else:
-                    self.vocab[word] += 1
-
-        # Discard start, end, pad and unk tokens if already present
-        if '<s>' in self.vocab:
-            del self.vocab['<s>']
-        if '<pad>' in self.vocab:
-            del self.vocab['<pad>']
-        if '</s>' in self.vocab:
-            del self.vocab['</s>']
-        if '<unk>' in self.vocab:
-            del self.vocab['<unk>']
-
-
-        sorted_word2id = sorted(
-            self.vocab.items(),
-            key=operator.itemgetter(1),
-            reverse=True
-        )
-
-        sorted_words = [x[0] for x in sorted_word2id]
-
-        for ind, word in enumerate(sorted_words):
-            self.src2index[word] = ind + 4
-
-        for ind, word in enumerate(sorted_words):
-            self.index2src[ind + 4] = word
-
+    def construct_vocab(self, filepath):
+        with open(filepath, 'r') as f:
+            vocabs = f.read().strip().split("\n")
+        for vocab in vocabs:
+            vocab = vocab.split(" : ")
+            vind = int(vocab[0])
+            word = vocab[1]
+            self.src2index[word] = vind
+            self.index2src[vind] = word
 
 
 
 class TargetDict(object):
-    def __init__(self, opt_path, const_path, train_path, test_path, dev_path):
-        self.opt2index = {
-        '<s>': 0,
-        '<pad>': 1,
-        '</s>': 2,
-        '<unk>': 3,
-        }
-        self.index2opt = {
-        0: '<s>',
-        1: '<pad>',
-        2: '</s>',
-        3: '<unk>',
-        }
-        self.arg2index = {
-        '<s>': 0,
-        '<pad>': 1,
-        '</s>': 2,
-        '<unk>': 3,
-        }
-        self.index2arg = {
-        0: '<s>',
-        1: '<pad>',
-        2: '</s>',
-        3: '<unk>',
-        }
-        self.create_vocb(opt_path, const_path, train_path, test_path, dev_path)
+    def __init__(self, opt_path, arg_path):
+        self.opt2index = {}
+        self.index2opt = {}
+        self.arg2index = {}
+        self.index2arg = {}
+        self.create_vocb(opt_path, arg_path)
         self.n_opts = len(self.index2opt)
         self.n_args = len(self.index2arg)
 
-    def create_vocb(self,opt_path, const_path, train_path, test_path, dev_path):
-        optindex = 4
-        argindex = 4
-        with open(opt_path, 'r', encoding='utf8') as f:
-            line = f.readline()
-            while line:
-                l = line.rstrip('\n')
-                if l:
-                    self.opt2index[l] = optindex
-                    self.index2opt[optindex] = l
-                    optindex += 1
-                line = f.readline()
+    def create_vocb(self, opt_path, arg_path):
+        with open(opt_path,  'r') as f:
+            opt_vocabs = f.read().strip().split("\n")
+        with open(arg_path, 'r') as f:
+            arg_vocabs = f.read().strip().split("\n")
+        for vocab in opt_vocabs:
+            vocab = vocab.split(" : ")
+            vind = int(vocab[0])
+            word = vocab[1]
+            self.opt2index[word] = vind
+            self.index2opt[vind] = word
+        for vocab in arg_vocabs:
+            vocab = vocab.split(" : ")
+            vind = int(vocab[0])
+            word = vocab[1]
+            self.arg2index[word] = vind
+            self.index2arg[vind] = word
 
-        with open(const_path, 'r', encoding='utf8') as f:
-            line = f.readline()
-            while line:
-                l = line.rstrip('\n')
-                if l:
-                    self.arg2index[l] = argindex
-                    self.index2arg[argindex] = l
-                    if '.' in l:
-                        l1 = l.replace('.','_')
-                        self.arg2index[l1] = argindex
-                    else:
-                        l1 = l+'.0'
-                        self.arg2index[l1] = argindex
-                    argindex += 1
-                line = f.readline()
-
-        for i in range(54):
-            l = '#'+str(i)
-            self.arg2index[l] = argindex
-            self.index2arg[argindex] = l
-            argindex += 1
-
-        
-        with open(train_path, 'r', encoding='utf8') as f:
-            data = json.load(f)
-            for d in data:
-                dlf_var = re.findall(r'n[0-9]+', d['linear_formula'])
-                for var in dlf_var:
-                    if var not in self.arg2index:
-                        self.arg2index[var] = argindex
-                        self.index2arg[argindex] = var
-                        argindex+=1
-
-        with open(test_path, 'r', encoding='utf8') as f1:
-            data1 = json.load(f1)
-            for d1 in data1:
-                dlf_var1 = re.findall(r'n[0-9]+', d1['linear_formula'])
-                for var1 in dlf_var1:
-                    if var1 not in self.arg2index:
-                        self.arg2index[var1] = argindex
-                        self.index2arg[argindex] = var1
-                        argindex+=1
-
-        with open(dev_path, 'r', encoding='utf8') as f1:
-            data1 = json.load(f1)
-            for d1 in data1:
-                dlf_var1 = re.findall(r'n[0-9]+', d1['linear_formula'])
-                for var1 in dlf_var1:
-                    if var1 not in self.arg2index:
-                        self.arg2index[var1] = argindex
-                        self.index2arg[argindex] = var1
-                        argindex+=1
-
-
+ 
 
 class InputFeatures(object):
     def __init__(self,
                  input_src_ids,
                  output_src_ids,
                  input_trg_ids,
-                 output_trg_ids):
+                 output_trg_ids,
+                 tests=None,
+                 exp_ind=None,
+                 args=None):
         self.input_src_ids = input_src_ids
         self.output_src_ids = output_src_ids
         self.input_trg_ids = input_trg_ids
         self.output_trg_ids = output_trg_ids
+        self.tests = tests
+        self.exp_ind = exp_ind
+        self.args = args
 
 
-def read_mathqa_examples(input_file):
+def read_lisp_examples(input_file):
     with open(input_file, 'r', encoding='utf8') as f:
         data = json.load(f)
     examples = [
-        MathQAExample(
-            d['Problem'],
-            d['Rationale'],
-            d['options'],
-            d['correct'],
-            d['annotated_formula'],
-            d['linear_formula'],
-            d['category']
+        LispExample(
+            d['text'],
+            d['code_tree'],
+            d['code_sequence'],
+            d['code_commands_pad'],
+            d['code_commands'],
+            d['tests'],
+            d['args']
             ) for d_index, d in enumerate(data)
     ]
-    #examples = [e for e in examples if len(e.options) == 5]
     return examples
 
 
-
-def convert_examples_to_features(examples, max_seq_length, src_dict, trg_dict, binary = False):
+def convert_examples_to_features(examples, max_seq_length, src_dict, trg_dict):
     features = []
     for example_index, example in enumerate(examples):
-        context_tokens = example.problem.strip().split()
-        target_tokens = example.linear_formula
+        context_tokens = example.text
+        target_tokens = example.code_commands_pad
+        example_tests = example.tests
+        example_args = example.args
         _truncate_seq_pair(context_tokens, max_seq_length-2)
         _truncate_seq_pair(target_tokens, max_seq_length-2)
         context_tokens = ['<s>'] + context_tokens + ['</s>']
-        target_tokens = ['<s>'] + target_tokens + ['</s>']
+        target_tokens = [['<s>','<s>','<s>','<s>']] + target_tokens + [['</s>','</s>','</s>','</s>']]
 
         input_src_ids = [src_dict.src2index[i] if i in src_dict.src2index else src_dict.src2index['<unk>'] for i in context_tokens[:-1]] + [src_dict.src2index['<pad>']]*(max_seq_length - len(context_tokens)+1)
 
         output_src_ids = [src_dict.src2index[i] if i in src_dict.src2index else src_dict.src2index['<unk>'] for i in context_tokens[1:]] + [src_dict.src2index['<pad>']]*(max_seq_length - len(context_tokens)+1)
-
-        if not binary:
-            input_trg_ids = [[trg_dict.opt2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>']]]
-            output_trg_ids = []
-            i=0
-            while i < len(target_tokens[1:-1]):
-                opt_tokenid = trg_dict.opt2index[target_tokens[1:-1][i]] if target_tokens[1:-1][i] in trg_dict.opt2index else trg_dict.opt2index['<unk>']
-                a1_tokenid = trg_dict.arg2index[target_tokens[1:-1][i+1]] if target_tokens[1:-1][i+1] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
-                a2_tokenid = trg_dict.arg2index['<unk>']
-                a3_tokenid = trg_dict.arg2index['<unk>']
-
-                if i+2 >= len(target_tokens[1:-1]) or target_tokens[1:-1][i+2] not in trg_dict.arg2index:
-                    a2_tokenid = trg_dict.arg2index['<unk>']
-                    i+=2
-                else:
-                    a2_tokenid = trg_dict.arg2index[(target_tokens[1:-1][i+2])] if target_tokens[1:-1][i+2] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
-                    i+=3
-
-                if a2_tokenid==trg_dict.arg2index['<unk>'] or i >= len(target_tokens[1:-1]) or target_tokens[1:-1][i] not in trg_dict.arg2index:
-                    a3_tokenid = trg_dict.arg2index['<unk>']
-                else:
-                    a3_tokenid = trg_dict.arg2index[(target_tokens[1:-1][i])] if target_tokens[1:-1][i] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
-                    i+=1
-                input_trg_ids.append([opt_tokenid, a1_tokenid, a2_tokenid, a3_tokenid])
-                output_trg_ids.append([opt_tokenid, a1_tokenid, a2_tokenid, a3_tokenid])
-
-            input_trg_ids = input_trg_ids + [[trg_dict.opt2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>']]]*(max_seq_length - len(input_trg_ids))
-            output_trg_ids = output_trg_ids + [[trg_dict.opt2index['</s>'],trg_dict.arg2index['</s>'],trg_dict.arg2index['</s>'],trg_dict.arg2index['</s>']]] + [[trg_dict.opt2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>']]]*(max_seq_length - len(output_trg_ids)-1)
-        else:
-            input_trg_ids = [[trg_dict.opt2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>']]]
-            output_trg_ids = []
-            i=0
-            while i < len(target_tokens[1:-1]):
-                opt_tokenid = trg_dict.opt2index[target_tokens[1:-1][i]] if target_tokens[1:-1][i] in trg_dict.opt2index else trg_dict.opt2index['<unk>']
-                a1_tokenid = trg_dict.arg2index[target_tokens[1:-1][i+1]] if target_tokens[1:-1][i+1] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
-                a2_tokenid = trg_dict.arg2index['<unk>']
-
-                if i+2 >= len(target_tokens[1:-1]) or target_tokens[1:-1][i+2] not in trg_dict.arg2index:
-                    a2_tokenid = trg_dict.arg2index['<unk>']
-                    i+=2
-                else:
-                    a2_tokenid = trg_dict.arg2index[(target_tokens[1:-1][i+2])] if target_tokens[1:-1][i+2] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
-                    i+=3
-
-                input_trg_ids.append([opt_tokenid, a1_tokenid, a2_tokenid])
-                output_trg_ids.append([opt_tokenid, a1_tokenid, a2_tokenid])
-
-            input_trg_ids = input_trg_ids + [[trg_dict.opt2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>']]]*(max_seq_length - len(input_trg_ids))
-            output_trg_ids = output_trg_ids + [[trg_dict.opt2index['</s>'],trg_dict.arg2index['</s>'],trg_dict.arg2index['</s>']]] + [[trg_dict.opt2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>']]]*(max_seq_length - len(output_trg_ids)-1)
-
+        input_trg_ids = []
+        output_trg_ids = []
+        for x in target_tokens[:-1]:
+            tempopt = trg_dict.opt2index[x[0]] if x[0] in trg_dict.opt2index else trg_dict.opt2index['<unk>']
+            tempa1 = trg_dict.arg2index[x[1]] if x[1] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
+            tempa2 = trg_dict.arg2index[x[2]] if x[2] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
+            tempa3 = trg_dict.arg2index[x[3]] if x[3] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
+            input_trg_ids.append([tempopt, tempa1, tempa2, tempa3])
+        for x in target_tokens[1:]:
+            tempopt = trg_dict.opt2index[x[0]] if x[0] in trg_dict.opt2index else trg_dict.opt2index['<unk>']
+            tempa1 = trg_dict.arg2index[x[1]] if x[1] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
+            tempa2 = trg_dict.arg2index[x[2]] if x[2] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
+            tempa3 = trg_dict.arg2index[x[3]] if x[3] in trg_dict.arg2index else trg_dict.arg2index['<unk>']
+            output_trg_ids.append([tempopt, tempa1, tempa2, tempa3])
+        input_trg_ids = input_trg_ids + [[trg_dict.opt2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>']]]*(max_seq_length - len(target_tokens)+1)
+        output_trg_ids = output_trg_ids + [[trg_dict.opt2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>'],trg_dict.arg2index['<pad>']]]*(max_seq_length - len(target_tokens)+1)
 
         features.append(
             InputFeatures(
                 input_src_ids = input_src_ids,
                 output_src_ids = output_src_ids,
                 input_trg_ids = input_trg_ids,
-                output_trg_ids = output_trg_ids
+                output_trg_ids = output_trg_ids, 
+                tests = example_tests,
+                exp_ind = example_index,
+                args = example_args
             )
         )
 
     return features
+
 
 def _truncate_seq_pair(tokens_a, max_length):
 
@@ -364,7 +191,6 @@ def _truncate_seq_pair(tokens_a, max_length):
         tokens_a.pop()
 
 
-# python run_lstm.py --do_train --do_eval --data_dir C:/NLI/MathQA/data/MathQA --output_dir C:/NLI/MathQA/result/lstm --max_seq_length 128 --learning_rate 2e-5 
 
 def main():
     parser = argparse.ArgumentParser()
@@ -412,12 +238,12 @@ def main():
                         help="Total batch size for training.")
 
     parser.add_argument("--eval_batch_size",
-                        default=32,
+                        default=64,
                         type=int,
                         help="Total batch size for eval.")
 
     parser.add_argument("--learning_rate",
-                        default=0.001,
+                        default=5e-5,
                         type=float,
                         help="The initial learning rate for Adam.")
 
@@ -434,7 +260,6 @@ def main():
                         type=int,
                         default=-1,
                         help="local_rank for distributed training on gpus")
-
 
     parser.add_argument("--checkpoint_freq",
                         type=int,
@@ -465,12 +290,6 @@ def main():
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")
 
-    parser.add_argument('--loss_scale',
-                        type=float, default=0,
-                        help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
-                             "0 (default value): dynamic loss scaling.\n"
-                             "Positive power of 2: static loss scaling value.\n")
-
     parser.add_argument('--nSymbols',
                         type=int, default=150,
                         help="nSymbols in TPR encoder")
@@ -484,7 +303,7 @@ def main():
                         help="dSymbols in TPR encoder")
 
     parser.add_argument('--dRoles',
-                        type=int, default=20,
+                        type=int, default=30,
                         help="dRoles in TPR encoder")
 
     parser.add_argument('--temperature',
@@ -492,7 +311,7 @@ def main():
                         help="temperature in TPR encoder and decoder")
 
     parser.add_argument('--dOpts',
-                        type=int, default=10,
+                        type=int, default=30,
                         help="dOpts in TPR decoder")
 
     parser.add_argument('--dArgs',
@@ -506,7 +325,6 @@ def main():
     parser.add_argument('--role_grad',
                         type=str, default="True",
                         help="role_grad")
-
 
     parser.add_argument('--attention',
                         type=str, default='dot',
@@ -524,14 +342,13 @@ def main():
                         type=str, default="False",
                         help="bidirectional for encoder")
 
-
-    parser.add_argument('--binary_rela',
-                        type=str, default="False",
-                        help="binary_rela")
-
     parser.add_argument('--lr_decay',
                         type=str, default="True",
                         help="lr_decay")
+
+    parser.add_argument('--clean_data',
+                        type=int, default=0,
+                        help="clean_data")
 
 
     args = parser.parse_args()
@@ -539,7 +356,6 @@ def main():
     args_role_grad = True if args.role_grad=="True" else False
     args_sum_T = True if args.sum_T=="True" else False
     args_bidirectional = True if args.bidirectional=="True" else False
-    args_binary_rela = True if args.binary_rela=="True" else False
     args_lr_decay = True if args.lr_decay=="True" else False
 
 
@@ -552,6 +368,7 @@ def main():
         n_gpu = 1
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.distributed.init_process_group(backend='nccl')
+
     logger.info("device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".format(
         device, n_gpu, bool(args.local_rank != -1), args.fp16))
 
@@ -575,19 +392,18 @@ def main():
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    if not args_binary_rela:
-        train_filepath = os.path.join(args.data_dir, 'train.json')
-        dev_filepath = os.path.join(args.data_dir, 'dev.json')
-        test_filepath = os.path.join(args.data_dir, 'test.json')
+    train_filepath = os.path.join(args.data_dir, 'algolisp_train.json')
+    dev_filepath = os.path.join(args.data_dir, 'algolisp_dev.json')
+    if args.clean_data==1:
+        test_filepath = os.path.join(args.data_dir, 'algolisp_test_clean.json')
     else:
-        train_filepath = os.path.join(args.data_dir, 'binary_train.json')
-        dev_filepath = os.path.join(args.data_dir, 'binary_dev.json')
-        test_filepath = os.path.join(args.data_dir, 'binary_test.json')
+        test_filepath = os.path.join(args.data_dir, 'algolisp_test.json')
+
 
     logger.info("***** Start Building target dictionary *****")
-    trg_dict = TargetDict(os.path.join(args.data_dir, 'operation_list.txt'), os.path.join(args.data_dir, 'constant_list.txt'),train_filepath,test_filepath,dev_filepath)
+    trg_dict = TargetDict(os.path.join(args.data_dir, 'opt_vocab.txt'), os.path.join(args.data_dir, 'arg_vocab.txt'))
     logger.info("***** Start Building source dictionary *****")
-    src_dict = SourceDict(train_filepath, test_filepath, dev_filepath)
+    src_dict = SourceDict(os.path.join(args.data_dir, 'text_vocab.txt'))
 
 
     weight_mask_opt = torch.ones(trg_dict.n_opts).to(device)
@@ -597,8 +413,7 @@ def main():
     loss_criterion_opt = nn.CrossEntropyLoss(weight=weight_mask_opt).to(device)
     loss_criterion_arg1 = nn.CrossEntropyLoss(weight=weight_mask_arg).to(device)
     loss_criterion_arg2 = nn.CrossEntropyLoss(weight=weight_mask_arg).to(device)
-    if not args_binary_rela:
-        loss_criterion_arg3 = nn.CrossEntropyLoss(weight=weight_mask_arg).to(device)
+    loss_criterion_arg3 = nn.CrossEntropyLoss(weight=weight_mask_arg).to(device)
 
     if args.do_train:
         model_batch_size = args.train_batch_size
@@ -620,7 +435,7 @@ def main():
     bidirectional=args_bidirectional,
     nSymbols=args.nSymbols, nRoles=args.nRoles, dSymbols=args.dSymbols, dRoles=args.dRoles,
     temperature=args.temperature, dOpts=args.dOpts, dArgs=args.dArgs, dPoss=args.dPoss,
-    sum_T = args_sum_T, reason_T = args.reason_T, binary = args_binary_rela
+    sum_T = args_sum_T, reason_T = args.reason_T, binary=False
     ).to(device)
 
 
@@ -630,7 +445,11 @@ def main():
             model.load_state_dict(torch.load(os.path.join(args.data_dir, args.eval_model_file)))
             model.eval()
         except:
-            checkpoint = torch.load(os.path.join(args.data_dir, args.eval_model_file))
+            if args.no_cuda:
+                checkpoint = torch.load(os.path.join(args.data_dir, args.eval_model_file),map_location='cpu')
+            else:
+                checkpoint = torch.load(os.path.join(args.data_dir, args.eval_model_file))
+
             from collections import OrderedDict
             new_state_dict = OrderedDict()
             for k, v in checkpoint.items():
@@ -652,24 +471,21 @@ def main():
         scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma = 0.95)
 
     if args.do_train:
-        train_examples = read_mathqa_examples(train_filepath)
-        train_features = convert_examples_to_features(train_examples, args.max_seq_length, src_dict, trg_dict, binary=args_binary_rela)
+        train_examples = read_lisp_examples(train_filepath)
+        train_features = convert_examples_to_features(train_examples, args.max_seq_length, src_dict, trg_dict)
         all_input_src_ids = Variable(torch.tensor([f.input_src_ids for f in train_features],dtype=torch.long)).to(device)
         all_output_src_ids = Variable(torch.tensor([f.output_src_ids for f in train_features],dtype=torch.long)).to(device)
         all_input_trg_ids = Variable(torch.tensor([f.input_trg_ids for f in train_features],dtype=torch.long)).to(device)
         all_output_trg_ids = Variable(torch.tensor([f.output_trg_ids for f in train_features],dtype=torch.long)).to(device)
         train_data = TensorDataset(all_input_src_ids, all_output_src_ids, all_input_trg_ids, all_output_trg_ids)
 
-
-        dev_examples = read_mathqa_examples(dev_filepath)
-        dev_features = convert_examples_to_features(dev_examples, args.max_seq_length, src_dict, trg_dict, binary=args_binary_rela)
+        dev_examples = read_lisp_examples(dev_filepath)
+        dev_features = convert_examples_to_features(dev_examples, args.max_seq_length, src_dict, trg_dict)
         all_input_src_ids_dev = Variable(torch.tensor([f.input_src_ids for f in dev_features],dtype=torch.long)).to(device)
         all_output_src_ids_dev = Variable(torch.tensor([f.output_src_ids for f in dev_features],dtype=torch.long)).to(device)
         all_input_trg_ids_dev = Variable(torch.tensor([f.input_trg_ids for f in dev_features],dtype=torch.long)).to(device)
         all_output_trg_ids_dev = Variable(torch.tensor([f.output_trg_ids for f in dev_features],dtype=torch.long)).to(device)
         dev_data = TensorDataset(all_input_src_ids_dev, all_output_src_ids_dev, all_input_trg_ids_dev, all_output_trg_ids_dev)
-        
-
 
         if args.local_rank == -1:
             train_sampler = RandomSampler(train_data)
@@ -677,7 +493,6 @@ def main():
             train_sampler = DistributedSampler(train_data)
 
         dev_sampler = RandomSampler(dev_data)
-
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
         dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.train_batch_size)
         train_dev_dataloader = {"train": train_dataloader, "dev": dev_dataloader}
@@ -697,37 +512,30 @@ def main():
                 else:
                     model.train(False)
 
-                
                 losses = []
                 for step, batch in enumerate(train_dev_dataloader[phase]):
                     batch = tuple(t.to(device) for t in batch)
-                    input_src_ids, output_src_ids, input_trg_ids, output_trg_ids = batch
+                    input_src_ids, output_src_ids, input_trg_ids, output_trg_ids= batch
                     
                     output_opt_ids = output_trg_ids[:,:,0]
                     output_a1_ids = output_trg_ids[:,:,1]
                     output_a2_ids = output_trg_ids[:,:,2]
-                    if not args_binary_rela:
-                        output_a3_ids = output_trg_ids[:,:,3]
-                        output_o, output_a1,output_a2, output_a3,aFs, aRs = model(input_src_ids, input_trg_ids)
-                    else:
-                        output_o, output_a1, output_a2, aFs, aRs = model(input_src_ids, input_trg_ids)
+                    output_a3_ids = output_trg_ids[:,:,3]
+                    output_o, output_a1,output_a2, output_a3,aFs, aRs = model(input_src_ids, input_trg_ids)
 
                     optimizer.zero_grad()
                     
                     loss_opt = loss_criterion_opt(output_o.contiguous().view(-1, trg_dict.n_opts),output_opt_ids.view(-1))
                     loss_a1 = loss_criterion_arg1(output_a1.contiguous().view(-1, trg_dict.n_args),output_a1_ids.view(-1))
                     loss_a2 = loss_criterion_arg2(output_a2.contiguous().view(-1, trg_dict.n_args),output_a2_ids.view(-1))
-
-                    if not args_binary_rela:
-                        loss_a3 = loss_criterion_arg3(output_a3.contiguous().view(-1, trg_dict.n_args),output_a3_ids.view(-1))
-                        loss = loss_opt + loss_a1 + loss_a2 + loss_a3
-                    else:
-                        loss = loss_opt + loss_a1 + loss_a2
+                    loss_a3 = loss_criterion_arg3(output_a3.contiguous().view(-1, trg_dict.n_args),output_a3_ids.view(-1))
+                    loss = loss_opt + loss_a1 + loss_a2 + loss_a3
 
                     losses.append(loss.item())
                     if phase=='train':
                         loss.backward()
                         optimizer.step()
+
                 if phase=='train' and args_lr_decay:
                     scheduler.step()
 
@@ -766,15 +574,15 @@ def main():
             bidirectional=args_bidirectional,
             nSymbols=args.nSymbols, nRoles=args.nRoles, dSymbols=args.dSymbols, dRoles=args.dRoles,
             temperature=args.temperature, dOpts=args.dOpts, dArgs=args.dArgs, dPoss=args.dPoss,
-            sum_T = args_sum_T, reason_T = args.reason_T, binary = args_binary_rela
+            sum_T = args_sum_T, reason_T = args.reason_T, binary=False
             ).to(device)
             model.load_state_dict(new_state_dict)
 
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
 
-        eval_examples = read_mathqa_examples(test_filepath)
-        eval_features = convert_examples_to_features(eval_examples, args.max_seq_length, src_dict, trg_dict, binary=args_binary_rela)
+        eval_examples = read_lisp_examples(test_filepath)
+        eval_features = convert_examples_to_features(eval_examples, args.max_seq_length, src_dict, trg_dict)
         logger.info("***** Running evaluation *****")
         logger.info("  Num examples = %d", len(eval_examples))
         logger.info("  Batch size = %d", args.eval_batch_size)
@@ -782,59 +590,46 @@ def main():
         all_output_src_ids = Variable(torch.tensor([f.output_src_ids for f in eval_features],dtype=torch.long)).to(device)
         all_input_trg_ids = Variable(torch.tensor([f.input_trg_ids for f in eval_features],dtype=torch.long)).to(device)
         all_output_trg_ids = Variable(torch.tensor([f.output_trg_ids for f in eval_features],dtype=torch.long)).to(device)
-        eval_data = TensorDataset(all_input_src_ids, all_output_src_ids, all_input_trg_ids, all_output_trg_ids)
+        all_exp_ids = Variable(torch.tensor([f.exp_ind for f in eval_features],dtype=torch.long))
+        eval_tests = [f.tests for f in eval_features]
+        eval_args = [f.args for f in eval_features]
+        eval_data = TensorDataset(all_input_src_ids, all_output_src_ids, all_input_trg_ids, all_output_trg_ids,all_exp_ids)
         eval_sampler = SequentialSampler(eval_data)
         eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=model_batch_size)
 
-
         model.eval()
-        bleu, prog_acc, result_pairs, input_F, input_R = evaluate.model_bleu_tpr2tpr(model, eval_dataloader, src_dict, trg_dict, args.max_seq_length,device, args_binary_rela)
-        
-        info_file_name = os.path.join(args.data_dir, "complete_all_info.tsv")
-        src_file_name = os.path.join(args.data_dir, "test_set_src.txt")
-
+        bleu, prog_acc, result_pairs, result_report= evaluate.model_eval(model, eval_dataloader, eval_tests, eval_args, src_dict, trg_dict, args.max_seq_length,device, False)
 
         pred_file = os.path.join(args.output_dir, "test_predications.txt")
         with open(pred_file, 'w', encoding='utf8') as writer:
             for q_pair in result_pairs:
                 question, pred_sen = q_pair
-                pred_sen = pred_sen[1:-1]
                 p_str = []
-                for p_char in pred_sen:
-                    if p_char != '<unk>' and p_char != '</s>':
-                        p_str.append(p_char)
+                for command in pred_sen:
+                    command = ["("] + command + [")"]
+                    for p_char in command:
+                        if p_char != '<unk>' and p_char != '</s>':
+                            p_str.append(p_char)
                 p_str = " ".join(p_str)
                 p_str = p_str.strip() 
                 p_str += '\n'
                 writer.write(p_str)
 
 
-        predications_test = []
-        for q_pair in result_pairs:
-            question, pred_sen = q_pair
-            pred_sen = pred_sen[1:-1]
-            p_str = []
-            for p_char in pred_sen:
-                if p_char != '<unk>' and p_char != '</s>':
-                    p_str.append(p_char)
-            p_str = " ".join(p_str)
-            p_str = p_str.strip()
-            predications_test.append(p_str)
-        score = solve.solve_procedure(info_file_name, src_file_name, predications_test, 1)
-
-
-
         output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
         with open(output_eval_file, 'w', encoding='utf8') as writer:
             logger.info("***** Eval results *****")
             logger.info("Bleu : %s", str(bleu))
-            logger.info("Program accuracy : %s", str(prog_acc))
-            logger.info("Execution Score : %s", str(score))
+            logger.info("accuracy : %s", str(result_report['accuracy']))
+            logger.info("50p_accuracy : %s", str(result_report['50p_accuracy']))
+            logger.info("exact_match_accuracy : %s", str(result_report['exact_match_accuracy']))
+            logger.info("exception : %s", str(result_report['other_exception_freq']))
 
             writer.write("Bleu : %s \n" % str(bleu))
-            writer.write("Program accuracy : %s \n" % str(prog_acc))
-            writer.write("Execution Score : %s \n" % str(score))
-
+            writer.write("accuracy : %s \n" % str(result_report['accuracy']))
+            writer.write("50p_accuracy : %s \n" % str(result_report['50p_accuracy']))
+            writer.write("exact_match_accuracy : %s \n" % str(result_report['exact_match_accuracy']))
+            writer.write("exception : %s \n" % str(result_report['other_exception_freq']))
 
 
 if __name__=="__main__":

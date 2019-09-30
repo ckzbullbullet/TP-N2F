@@ -8,7 +8,6 @@ import math
 import numpy as np
 import subprocess
 from tqdm import tqdm, trange
-from pytorch_seq2seq.model import TPN2F
 from sklearn.metrics import precision_recall_fscore_support as score
 from queue import PriorityQueue
 from lisp_exec import code_lisp
@@ -135,7 +134,7 @@ def model_eval(model, eval_dataloader, eval_tests, eval_args, src_dict, trg_dict
             ]
 
 
-            if (type(model) == TPN2F) and role_analysis:
+            if role_analysis:
                 aF_ids = [
                 [[i for i in x] for x in line] 
                 for line in aFs
@@ -156,7 +155,7 @@ def model_eval(model, eval_dataloader, eval_tests, eval_args, src_dict, trg_dict
                 for line in input_lines_trg
                 ]
 
-            if type(model) == TPN2F and role_analysis:
+            if role_analysis:
                 o_vecs = [
                 [[i for i in x] for x in line] 
                 for line in o_vec
@@ -266,13 +265,10 @@ def decode_minibatch(
     role_analysis = False
 ):
     for i in range(max_seq_length):
-        if type(model) == TPN2F:
-            if role_analysis:
-                decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3, aFs, aRs, output_o = model(input_lines_src, input_lines_trg, rela_analysis=True)
-            else:
-                decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3, aFs, aRs = model(input_lines_src, input_lines_trg)
+        if role_analysis:
+            decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3, aFs, aRs, output_o = model(input_lines_src, input_lines_trg, rela_analysis=True)
         else:
-            ecoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3= model(input_lines_src, input_lines_trg)
+            decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3, aFs, aRs = model(input_lines_src, input_lines_trg)
 
         word_probs_o = model.decode(decoder_logit_o,'opt')
         word_probs_a1 = model.decode(decoder_logit_a1,'arg')
@@ -302,11 +298,8 @@ def decode_minibatch(
         input_lines_trg = torch.cat((input_lines_trg, next_preds.unsqueeze(1)),1)
 
 
-    if type(model) == TPN2F:
-        if role_analysis:
-            return input_lines_trg, aFs.cpu().numpy(), aRs.cpu().numpy(), output_o.cpu().numpy()
-        else:
-            return input_lines_trg
+    if role_analysis:
+        return input_lines_trg, aFs.cpu().numpy(), aRs.cpu().numpy(), output_o.cpu().numpy()
     else:
         return input_lines_trg
 

@@ -7,7 +7,6 @@ import math
 import numpy as np
 import subprocess
 from tqdm import tqdm, trange
-from pytorch_seq2seq.model import TPN2F
 from sklearn.metrics import precision_recall_fscore_support as score
 from queue import PriorityQueue
 
@@ -50,8 +49,7 @@ def get_bleu(hypotheses, reference):
 
 
 
-
-def model_bleu_tpr2tpr(model, eval_dataloader, src_dict, trg_dict, max_seq_length, device, args_binary_rela=False, bert_encoding=False, rela_analysis=False):
+def model_eval(model, eval_dataloader, src_dict, trg_dict, max_seq_length, device, args_binary_rela=False, rela_analysis=False):
     preds = []
     ground_truths = []
     prog_accuracy = []
@@ -60,23 +58,19 @@ def model_bleu_tpr2tpr(model, eval_dataloader, src_dict, trg_dict, max_seq_lengt
     input_R = []
     output_O=[]
     print("binary : " + str(args_binary_rela))
-    print("rela_analysis : " + str(rela_analysis))
     for input_src_ids, output_src_ids, input_trg_ids, output_trg_ids in eval_dataloader:
         if args_binary_rela:
-            input_trg_pred = Variable(torch.LongTensor([[trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>']] for i in range(input_trg_ids.size(0))])).cuda()
+            input_trg_pred = Variable(torch.LongTensor([[trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>']] for i in range(input_trg_ids.size(0))])).to(device)
         else:
-            input_trg_pred = Variable(torch.LongTensor([[trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>']] for i in range(input_trg_ids.size(0))])).cuda()
+            input_trg_pred = Variable(torch.LongTensor([[trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>'],trg_dict.arg2index['<s>']] for i in range(input_trg_ids.size(0))])).to(device)
         input_trg_pred = input_trg_pred.unsqueeze(1)
 
         if not args_binary_rela:
             with torch.no_grad():
-                if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-                    if rela_analysis:
-                        input_trg_pred, aFs, aRs, o_vec = decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, args_binary_rela,rela_analysis=True)
-                    else:
-                        input_trg_pred, aFs, aRs= decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, args_binary_rela)
+                if rela_analysis:
+                    input_trg_pred, aFs, aRs, o_vec = decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, device, args_binary_rela,rela_analysis=True)
                 else:
-                    input_trg_pred = decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, args_binary_rela)
+                    input_trg_pred, aFs, aRs= decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, device, args_binary_rela)
 
                 input_lines_trg = input_trg_pred.cpu().numpy()
                 input_lines_trg = [
@@ -90,40 +84,24 @@ def model_bleu_tpr2tpr(model, eval_dataloader, src_dict, trg_dict, max_seq_lengt
                 for line in output_trg_ids
                 ]
 
-                if not bert_encoding:
-                    output_src_ids = output_src_ids.cpu().numpy()
-                    output_src_ids = [
-                    [src_dict.index2src[x] for x in line] 
-                    for line in output_src_ids
-                    ]
-                else:
-                    output_src_ids = [
-                    [1 for x in line] 
-                    for line in output_trg_ids
-                    ]
+                output_src_ids = output_src_ids.cpu().numpy()
+                output_src_ids = [
+                [src_dict.index2src[x] for x in line] 
+                for line in output_src_ids
+                ]
 
-                if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-                    aF_ids = [
-                    [[i for i in x] for x in line] 
-                    for line in aFs
-                    ]
+                aF_ids = [
+                [[i for i in x] for x in line] 
+                for line in aFs
+                ]
 
-                    aR_ids = [
-                    [[i for i in x] for x in line] 
-                    for line in aRs
-                    ]
-                else:
-                    aF_ids = [
-                    1
-                    for line in input_lines_trg
-                    ]
+                aR_ids = [
+                [[i for i in x] for x in line] 
+                for line in aRs
+                ]
 
-                    aR_ids = [
-                    1
-                    for line in input_lines_trg
-                    ]
 
-                if type(model) == TPR2TPRAttention and rela_analysis:
+                if rela_analysis:
                     o_vecs = [
                     [[i for i in x] for x in line] 
                     for line in o_vec
@@ -183,18 +161,14 @@ def model_bleu_tpr2tpr(model, eval_dataloader, src_dict, trg_dict, max_seq_lengt
                         prog_accuracy.append(0)
 
                     output_pairs.append((sentence_real_src, sentence_pred))
-                    if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-                        input_F.append((sentence_input_RF, sin_F))
-                        input_R.append((sentence_input_RF, sin_R))
+                    input_F.append((sentence_input_RF, sin_F))
+                    input_R.append((sentence_input_RF, sin_R))
         else:
             with torch.no_grad():
-                if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-                    if rela_analysis:
-                        input_trg_pred, aFs, aRs, o_vec = decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, args_binary_rela,rela_analysis=rela_analysis)
-                    else:
-                        input_trg_pred, aFs, aRs= decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, args_binary_rela)
+                if rela_analysis:
+                    input_trg_pred, aFs, aRs, o_vec = decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, device, args_binary_rela,rela_analysis=rela_analysis)
                 else:
-                    input_trg_pred = decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, args_binary_rela)
+                    input_trg_pred, aFs, aRs= decode_minibatch(model,input_src_ids,input_trg_pred,max_seq_length,trg_dict, device, args_binary_rela)
                 
                 input_lines_trg = input_trg_pred.cpu().numpy()
                 input_lines_trg = [
@@ -214,28 +188,18 @@ def model_bleu_tpr2tpr(model, eval_dataloader, src_dict, trg_dict, max_seq_lengt
                 for line in output_src_ids
                 ]
 
-                if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-                    aF_ids = [
-                    [[i for i in x] for x in line] 
-                    for line in aFs
-                    ]
+                aF_ids = [
+                [[i for i in x] for x in line] 
+                for line in aFs
+                ]
 
-                    aR_ids = [
-                    [[i for i in x] for x in line] 
-                    for line in aRs
-                    ]
-                else:
-                    aF_ids = [
-                    1
-                    for line in input_lines_trg
-                    ]
+                aR_ids = [
+                [[i for i in x] for x in line] 
+                for line in aRs
+                ]
 
-                    aR_ids = [
-                    1
-                    for line in input_lines_trg
-                    ]
 
-                if type(model) == TPR2TPRAttention and rela_analysis:
+                if rela_analysis:
                     o_vecs = [
                     [[i for i in x] for x in line] 
                     for line in o_vec
@@ -296,17 +260,13 @@ def model_bleu_tpr2tpr(model, eval_dataloader, src_dict, trg_dict, max_seq_lengt
                         prog_accuracy.append(0)
 
                     output_pairs.append((sentence_real_src, sentence_pred))
-                    if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-                        input_F.append((sentence_input_RF, sin_F))
-                        input_R.append((sentence_input_RF, sin_R))
+                    input_F.append((sentence_input_RF, sin_F))
+                    input_R.append((sentence_input_RF, sin_R))
                 
-    if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-        if rela_analysis:
-            return get_bleu(preds,ground_truths), sum(prog_accuracy)/float(len(prog_accuracy)), output_pairs,input_F,input_R, output_O
-        else:
-            return get_bleu(preds,ground_truths), sum(prog_accuracy)/float(len(prog_accuracy)), output_pairs,input_F,input_R 
+    if rela_analysis:
+        return get_bleu(preds,ground_truths), sum(prog_accuracy)/float(len(prog_accuracy)), output_pairs,input_F,input_R, output_O
     else:
-        return get_bleu(preds,ground_truths), sum(prog_accuracy)/float(len(prog_accuracy)), output_pairs
+        return get_bleu(preds,ground_truths), sum(prog_accuracy)/float(len(prog_accuracy)), output_pairs,input_F,input_R 
 
 
 
@@ -318,26 +278,22 @@ def decode_minibatch(
     input_lines_trg,
     max_seq_length, 
     trg_dict, 
+    device,
     args_binary_rela = False,
     rela_analysis=False
 ):
     for i in range(max_seq_length):
-        if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-            if not args_binary_rela:
-                if rela_analysis:
-                    decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3, output_o, aFs, aRs = model(input_lines_src, input_lines_trg, rela_analysis=True)
-                else:
-                    decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3, aFs, aRs = model(input_lines_src, input_lines_trg)
+        if not args_binary_rela:
+            if rela_analysis:
+                decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3, output_o, aFs, aRs = model(input_lines_src, input_lines_trg, rela_analysis=True)
             else:
-                if rela_analysis:
-                    decoder_logit_o,decoder_logit_a1,decoder_logit_a2, output_o, aFs, aRs= model(input_lines_src, input_lines_trg, rela_analysis=True)
-                else:
-                    decoder_logit_o,decoder_logit_a1,decoder_logit_a2,aFs, aRs= model(input_lines_src, input_lines_trg)
+                decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3, aFs, aRs = model(input_lines_src, input_lines_trg)
         else:
-            if not args_binary_rela:
-                decoder_logit_o,decoder_logit_a1,decoder_logit_a2,decoder_logit_a3= model(input_lines_src, input_lines_trg)
+            if rela_analysis:
+                decoder_logit_o,decoder_logit_a1,decoder_logit_a2, output_o, aFs, aRs= model(input_lines_src, input_lines_trg, rela_analysis=True)
             else:
-                decoder_logit_o,decoder_logit_a1,decoder_logit_a2= model(input_lines_src, input_lines_trg)
+                decoder_logit_o,decoder_logit_a1,decoder_logit_a2,aFs, aRs= model(input_lines_src, input_lines_trg)
+
         word_probs_o = model.decode(decoder_logit_o,'opt')
         word_probs_a1 = model.decode(decoder_logit_a1,'arg')
         word_probs_a2 = model.decode(decoder_logit_a2,'arg')
@@ -352,17 +308,17 @@ def decode_minibatch(
 
         next_preds_o = Variable(
             torch.from_numpy(decoder_argmax_o[:, -1])
-        ).unsqueeze(-1).cuda()
+        ).unsqueeze(-1).to(device)
         next_preds_a1 = Variable(
             torch.from_numpy(decoder_argmax_a1[:, -1])
-        ).unsqueeze(-1).cuda()
+        ).unsqueeze(-1).to(device)
         next_preds_a2 = Variable(
             torch.from_numpy(decoder_argmax_a2[:, -1])
-        ).unsqueeze(-1).cuda()
+        ).unsqueeze(-1).to(device)
         if not args_binary_rela:
             next_preds_a3 = Variable(
                 torch.from_numpy(decoder_argmax_a3[:, -1])
-            ).unsqueeze(-1).cuda()
+            ).unsqueeze(-1).to(device)
 
         if rela_analysis:
             if i==0:
@@ -379,10 +335,7 @@ def decode_minibatch(
         input_lines_trg = torch.cat((input_lines_trg, next_preds.unsqueeze(1)),1)
 
 
-    if type(model) == TPR2TPRAttention or type(model) == BertTPR2TPR:
-        if rela_analysis:
-            return input_lines_trg, aFs.cpu().numpy(), aRs.cpu().numpy(), output_o_vectors.cpu().numpy()
-        else:
-            return input_lines_trg, aFs.cpu().numpy(), aRs.cpu().numpy()
+    if rela_analysis:
+        return input_lines_trg, aFs.cpu().numpy(), aRs.cpu().numpy(), output_o_vectors.cpu().numpy()
     else:
-        return input_lines_trg
+        return input_lines_trg, aFs.cpu().numpy(), aRs.cpu().numpy()

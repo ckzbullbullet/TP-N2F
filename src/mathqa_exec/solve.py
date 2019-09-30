@@ -1,5 +1,5 @@
-import new_DataStructure as ds
-import find_non_numeric_answers as fn
+from mathqa_exec import new_DataStructure as ds
+from mathqa_exec import find_non_numeric_answers as fn
 import re
 import argparse
 import math
