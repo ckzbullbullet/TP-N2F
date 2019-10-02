@@ -412,7 +412,7 @@ def main():
 
     parser.add_argument("--do_eval",
                         action='store_true',
-                        help="Whether to run eval on the dev set.")
+                        help="Whether to run evaluation")
 
     parser.add_argument("--train_batch_size",
                         default=128,
@@ -447,17 +447,17 @@ def main():
     parser.add_argument("--checkpoint_freq",
                         type=int,
                         default=-1,
-                        help="model checkpoint each #n of epochs")
+                        help="model checkpoint each #n of epochs (save the model each #n of epochs)")
 
     parser.add_argument("--src_layer",
                         type=int,
                         default=1,
-                        help="src_layer")
+                        help="src_layer numbers in TP-N2F encoder")
 
     parser.add_argument("--trg_layer",
                         type=int,
                         default=1,
-                        help="trg_layer")
+                        help="trg_layer numbers in TP-N2F decoder")
 
     parser.add_argument('--seed',
                         type=int,
@@ -481,51 +481,51 @@ def main():
 
     parser.add_argument('--nSymbols',
                         type=int, default=150,
-                        help="nSymbols in TPR encoder")
+                        help="number of fillers in TP-N2F encoder")
 
     parser.add_argument('--nRoles',
                         type=int, default=50,
-                        help="nRoles in TPR encoder")
+                        help="number of roles in TP-N2F encoder")
 
     parser.add_argument('--dSymbols',
                         type=int, default=30,
-                        help="dSymbols in TPR encoder")
+                        help="dimension of the filler vector in TP-N2F encoder")
 
     parser.add_argument('--dRoles',
                         type=int, default=20,
-                        help="dRoles in TPR encoder")
+                        help="dimension of the role vector in TP-N2F encoder")
 
     parser.add_argument('--temperature',
                         type=float, default=0.1,
-                        help="temperature in TPR encoder and decoder")
+                        help="temperature in TP-N2F encoder")
 
     parser.add_argument('--dOpts',
                         type=int, default=10,
-                        help="dOpts in TPR decoder")
+                        help="dimension of operator vector in TP-N2F decoder")
 
     parser.add_argument('--dArgs',
                         type=int, default=20,
-                        help="dArgs in TPR decoder")
+                        help="dimension of argument vector in TP-N2F decoder")
 
     parser.add_argument('--dPoss',
                         type=int, default=5,
-                        help="dPoss in TPR decoder")
+                        help="dimension of position vector in TP-N2F decoder")
 
     parser.add_argument('--role_grad',
                         type=str, default="True",
-                        help="role_grad")
+                        help="whether position vector is trained or one-hot vectors")
 
     parser.add_argument('--attention',
                         type=str, default='dot',
-                        help="attention type")
+                        help="attention type dot/tpr")
 
     parser.add_argument('--sum_T',
                         type=str, default="True",
-                        help="sum_T")
+                        help="Whether the output of TP-N2F encoder is the sum of all tensor product or the last one")
 
     parser.add_argument('--reason_T',
                         type=int, default=1,
-                        help="reason_T")
+                        help="number of layers of the TP-N2F reasoning MLP. Only support 1 or 2 layers")
 
     parser.add_argument('--bidirectional',
                         type=str, default="False",
@@ -533,12 +533,12 @@ def main():
 
 
     parser.add_argument('--binary_rela',
-                        type=str, default="False",
-                        help="binary_rela")
+                        type=str, default="True",
+                        help="Whether use the binary relational tuple version or tuple with three arguments")
 
     parser.add_argument('--lr_decay',
                         type=str, default="True",
-                        help="lr_decay")
+                        help="whether have learning rate decay")
 
 
     args = parser.parse_args()
