@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 
 class MathQAExample(object):
-    """A single training/test example for the SWAG dataset."""
     def __init__(self,
                  problem,
                  rationale,
@@ -79,7 +78,7 @@ class MathQAExample(object):
 
 
 class SourceDict(object):
-    def __init__(self, train_path, test_path, dev_path):
+    def __init__(self, train_path, test_path, dev_path, chall_path):
         self.vocab = {}
 
         self.src2index = {
@@ -96,11 +95,11 @@ class SourceDict(object):
         3: '<unk>',
         }
 
-        lines = self.extract_lines(train_path, test_path, dev_path)
+        lines = self.extract_lines(train_path, test_path, dev_path, chall_path)
         self.construct_vocab(lines)
         self.n_srcs = len(self.src2index)
 
-    def extract_lines(self,train_path, test_path, dev_path):
+    def extract_lines(self,train_path, test_path, dev_path, chall_path):
         lines = []
         with open(train_path, 'r', encoding='utf8') as f:
             for line in f:
@@ -109,6 +108,9 @@ class SourceDict(object):
             for line in f:
                 lines.append(line.strip().split())
         with open(dev_path, 'r', encoding='utf8') as f:
+            for line in f:
+                lines.append(line.strip().split())
+        with open(chall_path, 'r', encoding='utf8') as f:
             for line in f:
                 lines.append(line.strip().split())
         return lines
@@ -151,7 +153,7 @@ class SourceDict(object):
 
 
 class TargetDict(object):
-    def __init__(self, opt_path, const_path, train_path, test_path, dev_path):
+    def __init__(self, opt_path, const_path, train_path, test_path, dev_path,chall_path):
         self.opt2index = {
         '<s>': 0,
         '<pad>': 1,
@@ -176,11 +178,11 @@ class TargetDict(object):
         2: '</s>',
         3: '<unk>',
         }
-        self.create_vocb(opt_path, const_path, train_path, test_path, dev_path)
+        self.create_vocb(opt_path, const_path, train_path, test_path, dev_path, chall_path)
         self.n_opts = len(self.index2opt)
         self.n_args = len(self.index2arg)
 
-    def create_vocb(self,opt_path, const_path, train_path, test_path, dev_path):
+    def create_vocb(self,opt_path, const_path, train_path, test_path, dev_path, chall_path):
         optindex = 4
         argindex = 4
         with open(opt_path, 'r', encoding='utf8') as f:
@@ -237,6 +239,16 @@ class TargetDict(object):
                         argindex+=1
 
         with open(dev_path, 'r', encoding='utf8') as f1:
+            data1 = json.load(f1)
+            for d1 in data1:
+                dlf_var1 = re.findall(r'n[0-9]+', d1['linear_formula'])
+                for var1 in dlf_var1:
+                    if var1 not in self.arg2index:
+                        self.arg2index[var1] = argindex
+                        self.index2arg[argindex] = var1
+                        argindex+=1
+
+        with open(chall_path, 'r', encoding='utf8') as f1:
             data1 = json.load(f1)
             for d1 in data1:
                 dlf_var1 = re.findall(r'n[0-9]+', d1['linear_formula'])
@@ -574,15 +586,17 @@ def main():
         train_filepath = os.path.join(args.data_dir, 'train.json')
         dev_filepath = os.path.join(args.data_dir, 'dev.json')
         test_filepath = os.path.join(args.data_dir, 'test.json')
+        challenge_filepath = os.path.join(args.data_dir, 'challenge_test.json')
     else:
         train_filepath = os.path.join(args.data_dir, 'binary_train.json')
         dev_filepath = os.path.join(args.data_dir, 'binary_dev.json')
         test_filepath = os.path.join(args.data_dir, 'binary_test.json')
+        challenge_filepath = os.path.join(args.data_dir, 'binary_challenge_test.json')
 
     logger.info("***** Start Building target dictionary *****")
-    trg_dict = TargetDict(os.path.join(args.data_dir, 'operation_list.txt'), os.path.join(args.data_dir, 'constant_list.txt'),train_filepath,test_filepath,dev_filepath)
+    trg_dict = TargetDict(os.path.join(args.data_dir, 'operation_list.txt'), os.path.join(args.data_dir, 'constant_list.txt'),train_filepath,test_filepath,dev_filepath,challenge_filepath)
     logger.info("***** Start Building source dictionary *****")
-    src_dict = SourceDict(train_filepath, test_filepath, dev_filepath)
+    src_dict = SourceDict(train_filepath, test_filepath, dev_filepath, challenge_filepath)
 
 
     weight_mask_opt = torch.ones(trg_dict.n_opts).to(device)
@@ -624,6 +638,7 @@ def main():
             logging.info("The experiment only for evalulation.")
             model.load_state_dict(torch.load(os.path.join(args.data_dir, args.eval_model_file)))
             model.eval()
+            print("Load pretrained model 1")
         except:
             if args.no_cuda:
                 checkpoint = torch.load(os.path.join(args.data_dir, args.eval_model_file),map_location='cpu')
@@ -635,8 +650,9 @@ def main():
                 name = k[7:]
                 new_state_dict[name] = v
             model.load_state_dict(new_state_dict)
+            print("Load pretrained model")
 
-    if n_gpu > 1:
+    if n_gpu > 1 and args.do_train:
         model = torch.nn.DataParallel(model)
 
     if args.optimizer == 'adam':

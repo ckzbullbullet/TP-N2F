@@ -1,5 +1,5 @@
 import re
-import parsing
+from mathqa_exec import parsing
 # from parsing import NumericStringParser
 from itertools import permutations
 from fractions import Fraction

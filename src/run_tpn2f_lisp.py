@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 
 class LispExample(object):
-    """A single training/test example for the SWAG dataset."""
     def __init__(self,
                  text,
                  code_tree,
@@ -457,7 +456,7 @@ def main():
                 new_state_dict[name] = v
             model.load_state_dict(new_state_dict)
 
-    if n_gpu > 1:
+    if n_gpu > 1 and args.do_train:
         model = torch.nn.DataParallel(model)
 
     if args.optimizer == 'adam':
@@ -598,7 +597,7 @@ def main():
         eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=model_batch_size)
 
         model.eval()
-        bleu, prog_acc, result_pairs, result_report= evaluate.model_eval(model, eval_dataloader, eval_tests, eval_args, src_dict, trg_dict, args.max_seq_length,device, False)
+        bleu, result_pairs, result_report= evaluate.model_eval(model, eval_dataloader, eval_tests, eval_args, src_dict, trg_dict, args.max_seq_length,device, False)
 
         pred_file = os.path.join(args.output_dir, "test_predications.txt")
         with open(pred_file, 'w', encoding='utf8') as writer:

@@ -132,6 +132,12 @@ def model_eval(model, eval_dataloader, eval_tests, eval_args, src_dict, trg_dict
             [[trg_dict.index2opt[x[0]],trg_dict.index2arg[x[1]],trg_dict.index2arg[x[2]],trg_dict.index2arg[x[3]]] for x in line]
             for line in output_trg_ids
             ]
+            
+            output_src_ids = output_src_ids.cpu().numpy()
+            output_src_ids = [
+            [src_dict.index2src[x] for x in line] 
+            for line in output_src_ids
+            ]
 
 
             if role_analysis:

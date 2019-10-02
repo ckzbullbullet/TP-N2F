@@ -206,7 +206,7 @@ def model_eval(model, eval_dataloader, src_dict, trg_dict, max_seq_length, devic
                     ]
                 else:
                     o_vecs = [
-                    1
+                    [1,1,1,1]
                     for line in input_lines_trg
                     ]
 
@@ -252,8 +252,6 @@ def model_eval(model, eval_dataloader, src_dict, trg_dict, max_seq_length, devic
                         sentence_input_RF = sentence_real_src[1:]
                         sin_F = sin_F[:index+1]
                         sin_R = sin_R[:index+1]
-
-
                     if sentence_real == sentence_pred:
                         prog_accuracy.append(1)
                     else:
