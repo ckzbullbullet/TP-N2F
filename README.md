@@ -13,7 +13,7 @@
  cudnn7+
  ```
 ## Data
-We cleaned the data for both dataset. You can download them at (https://drive.google.com/file/d/15apXXavs4nmdeZnLUDKNuQcxZXLhULYy/view?usp=sharing).
+We cleaned the data for both dataset. You can download them at [here](https://drive.google.com/file/d/15apXXavs4nmdeZnLUDKNuQcxZXLhULYy/view?usp=sharing).
 Download the zip file and unzip it at the same level of src folder. 
 
 ## Train models
@@ -28,7 +28,7 @@ Download the zip file and unzip it at the same level of src folder.
  ```
 
 ## Duplicate our results
- You can download the data and our pretrained-models for MathQA and AlgoLisp datasets from [here](https://drive.google.com/file/d/15apXXavs4nmdeZnLUDKNuQcxZXLhULYy/view?usp=sharing). Once you download the data.zip, you unzip the data folder at the same level of 'src' folder (Same as data section). Then, you can run the following commands under src folder to get the results for both datasets. We created a 'results' folder to save the results (If you want to test them on CPU, you add the option "--no_cuda" for each command).
+ You can download the data from the link at data section. Once you download the data.zip, you unzip the data folder at the same level of 'src' folder. Then, you can run the following commands under src folder to get the results for both datasets. We created a 'results' folder to save the results (If you want to test them on CPU, you add the option "--no_cuda" for each command).
  MathQA
  ```
  python run_tpn2f_mathqa.py --data_dir ../data/MathQA --output_dir ../results --eval_model_file mathqa_150_50_30_20_10_20_5.model --do_eval --train_batch_size 128 --eval_batch_size 256 --learning_rate 0.001 --num_train_epochs 60 --binary_rela True --bidirectional True
