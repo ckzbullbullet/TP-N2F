@@ -1,7 +1,7 @@
 # TP-N2F
  TP-N2F model
 ## Paper
- This is Pytorch implementation of TP-N2F model for paper "Natural- to formal-language generation using Tensor Product Representations"
+ This is Pytorch implementation of TP-N2F model for paper "Mapping Natural-language Problems to Formal-language Solutions Using Structured Neural Representations"
 
 ## Requirements
  This project supports both GPUs and CPUs. The following requirements are for GPU users. If you want to train or test the models on CPUs, you could ignore the packages related CUDA. All required packages are in requirements.txt. Both Linux and Windows users can use "pip" to install required packages.
